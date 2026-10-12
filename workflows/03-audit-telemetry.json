@@ -1,0 +1,128 @@
+{
+ "name": "Audit Telemetry",
+ "nodes": [
+  {
+   "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c55",
+   "name": "Telemetry Webhook",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    -520,
+    0
+   ],
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "audit-telemetry",
+    "responseMode": "onReceived",
+    "options": {}
+   }
+  },
+  {
+   "id": "2b3c4d5e-6f70-4b8c-9d0e-1f2a3b4c5d66",
+   "name": "Filter Event",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -280,
+    0
+   ],
+   "parameters": {
+    "jsCode": "const b = $json.body ?? $json;\nconst ua = String($json.headers?.['user-agent'] ?? '');\nconst bot = /bot|spider|crawler|preview|prefetch|outlook|safelinks|barracuda|link.?check|headless/i.test(ua);\nconst type = String(b.type ?? '');\nconst accepted = !bot && ['view','scroll_25','scroll_50','scroll_75','scroll_100','op_ed_reached','cta_click','pdf_download','time_on_page'].includes(type);\nreturn [{ json: { job_id: String(b.job_id ?? ''), slug: String(b.slug ?? ''), event_type: type, session_id: String(b.session_id ?? ''), accepted } }];"
+   }
+  },
+  {
+   "id": "c4d5e6f7-8192-4d0e-1f2a-3b4c5d6e7f88",
+   "name": "Accepted?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.2,
+   "position": [
+    -40,
+    0
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "strict",
+      "version": 2
+     },
+     "conditions": [
+      {
+       "id": "3c4d5e6f-7081-4c9d-0e1f-2a3b4c5d6e77",
+       "leftValue": "={{ $json.accepted }}",
+       "rightValue": true,
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "d5e6f708-92a3-4e1f-2a3b-4c5d6e7f80a9",
+   "name": "Record Event and Update State",
+   "type": "n8n-nodes-base.postgres",
+   "typeVersion": 2.6,
+   "position": [
+    200,
+    0
+   ],
+   "parameters": {
+    "operation": "executeQuery",
+    "query": "insert into audit_telemetry(client_slug,job_id,slug,event_type,session_id) values ('example-client',$1,$2,$3,$4) on conflict (job_id,event_type,session_id) do nothing; update audit_jobs set follow_up_state=case when $3 in ('op_ed_reached','cta_click') then 'ENGAGED' when $3='view' then 'VIEWED' else follow_up_state end, updated_at=now() where job_id=$1;",
+    "options": {
+     "queryReplacement": "={{ [$json.job_id,$json.slug,$json.event_type,$json.session_id] }}"
+    }
+   }
+  }
+ ],
+ "connections": {
+  "Telemetry Webhook": {
+   "main": [
+    [
+     {
+      "node": "Filter Event",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Filter Event": {
+   "main": [
+    [
+     {
+      "node": "Accepted?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Accepted?": {
+   "main": [
+    [
+     {
+      "node": "Record Event and Update State",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  }
+ },
+ "settings": {
+  "saveManualExecutions": true,
+  "saveDataErrorExecution": "all",
+  "saveDataSuccessExecution": "none",
+  "timezone": "Europe/Berlin",
+  "executionOrder": "v1"
+ }
+}

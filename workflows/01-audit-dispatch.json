@@ -1,0 +1,164 @@
+{
+ "name": "Audit Dispatch",
+ "nodes": [
+  {
+   "id": "5e1c0f21-8c11-4a27-9a45-8a2a2a7c1a11",
+   "name": "Positive Reply Webhook",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    -520,
+    0
+   ],
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "audit-dispatch",
+    "responseMode": "onReceived",
+    "options": {}
+   }
+  },
+  {
+   "id": "a1b7e2d4-9f3c-4e6b-8d2a-7c4a5b6c1d11",
+   "name": "Build Audit Request",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -280,
+    0
+   ],
+   "parameters": {
+    "jsCode": "const b = $json.body ?? $json;\nconst src = b.lead ?? b;\nconst email = String(src.email ?? '').trim().toLowerCase();\nconst website = String(src.website ?? src.company_website ?? '').trim();\nlet domain = website.replace(/^https?:\\/\\//i, '').split('/')[0];\nif (!domain && email.includes('@')) {const candidate=email.split('@')[1];if(!['gmail.com','googlemail.com','outlook.com','hotmail.com','live.com','yahoo.com','aol.com','icloud.com','proton.me','protonmail.com'].includes(candidate))domain=candidate;}\ndomain = domain.toLowerCase().replace(/^www\\./, '');\nconst subject = String(src.subject ?? b.subject ?? '');\nlet companyNameHint = String(src.company_name_hint ?? '').trim();\nif (!companyNameHint) {\n  const subjectMatch = subject.match(/(?:draft|feature|story|piece|article)(?:\\s+(?:for|on))?\\s+(.+?)\\s*$/i);\n  companyNameHint = subjectMatch?.[1]?.trim() ?? '';\n}\nconst lead = {\n  ...src,\n  email: email,\n  company_name_hint: companyNameHint,\n  email_account: String(src.email_account ?? b.email_account ?? ''),\n  reply_to_uuid: String(src.reply_to_uuid ?? b.reply_to_uuid ?? ''),\n  subject: subject\n};\nconst callbackUrl = b.callback_url ?? 'https://n8n.example.com/webhook/audit-complete';\nconst body = { domain: domain, lead: lead, company_name: companyNameHint, offer_mode: b.offer_mode || 'feature_plus_audit', options: { fixture: Boolean(b.options?.fixture) }, callback_url: callbackUrl };\nreturn [{ json: { domain: domain, research_blocker: !/^[a-z0-9.-]+\\.[a-z][a-z0-9-]+$/i.test(domain) ? 'verified_company_website_needed' : '', lead: lead, callback_url: callbackUrl, request_body: body } }];"
+   }
+  },
+  {
+   "id": "c3d9f4e6-1b2a-4c7d-9e8f-5a6b7c8d1e21",
+   "name": "POST Audit Engine",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    -40,
+    0
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "https://audit.example.com/audits",
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ $json.request_body }}",
+    "options": {},
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth"
+   }
+  },
+  {
+   "id": "domain-ready",
+   "name": "Delivery Domain Ready?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.2,
+   "position": [
+    600,
+    100
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "strict",
+      "version": 2
+     },
+     "conditions": [
+      {
+       "id": "ready",
+       "leftValue": "={{ true }}",
+       "rightValue": true,
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      },
+      {
+       "id": "has-valid-company-website",
+       "leftValue": "={{ Boolean($json.domain) && !$json.research_blocker }}",
+       "rightValue": true,
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "domain-hold",
+   "name": "Hold for Domain Migration",
+   "type": "n8n-nodes-base.postgres",
+   "typeVersion": 2.6,
+   "position": [
+    850,
+    300
+   ],
+   "parameters": {
+    "operation": "executeQuery",
+    "query": "update appointment_leads set status=case when status in ('booked','suppressed') then status else 'needs_review' end,attention_reason=$2,next_contact_at=null,notes=coalesce(notes,'') || E'\\nArticle delivery held until audit.example.com DNS and HTTPS are verified.',updated_at=now() where client_slug='example-client' and email=lower(trim($1));select true as held;",
+    "options": {
+     "queryReplacement": "={{ [$json.lead.email,$json.research_blocker || 'delivery_domain_not_ready'] }}"
+    }
+   }
+  }
+ ],
+ "connections": {
+  "Positive Reply Webhook": {
+   "main": [
+    [
+     {
+      "node": "Build Audit Request",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Build Audit Request": {
+   "main": [
+    [
+     {
+      "node": "Delivery Domain Ready?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Delivery Domain Ready?": {
+   "main": [
+    [
+     {
+      "node": "POST Audit Engine",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Hold for Domain Migration",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "saveManualExecutions": true,
+  "saveDataErrorExecution": "all",
+  "saveDataSuccessExecution": "none",
+  "timezone": "Europe/Berlin",
+  "executionOrder": "v1"
+ }
+}
